@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# Generated Prisma client
+src/generated/
+
+# Environment
+.env
+.env.test
+
+# Logs
+logs/*
+!logs/.gitkeep
+*.log
+
+# Uploaded files (local storage driver)
+storage/*
+!storage/.gitkeep
+
+# Test coverage
+coverage/
+
+# OS / editor
+.DS_Store
+.idea/

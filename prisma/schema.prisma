@@ -1,0 +1,797 @@
+// Indoventura Training & Recipe LMS
+// Docs: https://pris.ly/d/prisma-schema
+// Connection string lives in prisma.config.ts (Prisma 7)
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+// Which users/records a role can see in lists and reports
+enum role_scope {
+  all // every brand and outlet
+  brand // users of own brand
+  franchise // users of outlets owned by the user
+  outlet // users of own outlet
+  self // own records only
+}
+
+enum category_type {
+  training
+  recipe
+}
+
+enum video_source {
+  bunny // uploaded to / imported into Bunny Stream (signed HLS)
+  external // plain HLS link, not protected (demo / legacy content only)
+}
+
+enum video_state {
+  uploading
+  processing
+  ready
+  failed
+}
+
+enum version_state {
+  draft
+  published
+  superseded
+}
+
+// What happens to existing learners when a version is published
+enum update_action {
+  none // minor fix, completions stay valid
+  reacknowledge // completed users must acknowledge the updated SOP again
+  retrain // completed users must redo the full module
+}
+
+enum question_type {
+  single
+  multiple
+  written
+}
+
+enum assignment_state {
+  assigned
+  in_progress
+  failed
+  completed
+  revoked
+}
+
+enum assignment_source {
+  manual
+  group
+  path
+  self
+  retraining
+}
+
+enum attempt_state {
+  in_progress
+  submitted
+}
+
+enum notification_type {
+  new_training
+  deadline_reminder
+  overdue
+  retraining
+  account
+  general
+}
+
+enum otp_purpose {
+  password_reset
+}
+
+// ---------------------------------------------------------------------------
+// Access control
+// ---------------------------------------------------------------------------
+
+model sys_module {
+  module_id         Int               @id @default(autoincrement())
+  module_key        String            @unique @db.VarChar(255)
+  module_name       String?           @db.VarChar(255)
+  module_status     Boolean           @default(true)
+  module_created_by String?           @db.VarChar(25)
+  module_updated_by String?           @db.VarChar(25)
+  module_created_at DateTime          @default(now())
+  module_updated_at DateTime          @default(now()) @updatedAt
+  module_archived   Boolean           @default(false)
+  module_deleted    Boolean           @default(false)
+  module_role_map   module_role_map[]
+}
+
+model roles {
+  role_id               Int               @id @default(autoincrement())
+  role_key              String            @unique @db.VarChar(255)
+  role_name             String            @db.VarChar(255)
+  role_description      String?           @db.VarChar(255)
+  role_scope            role_scope        @default(self)
+  role_shift_restricted Boolean           @default(true)
+  role_is_system        Boolean           @default(false)
+  role_status           Boolean           @default(true)
+  role_created_by       String?           @db.VarChar(25)
+  role_updated_by       String?           @db.VarChar(25)
+  role_created_at       DateTime          @default(now())
+  role_updated_at       DateTime          @default(now()) @updatedAt
+  role_archived         Boolean           @default(false)
+  role_deleted          Boolean           @default(false)
+  module_role_map       module_role_map[]
+  users                 users[]
+  training_paths        training_paths[]
+
+  @@index([role_status], map: "role_status_index")
+}
+
+model module_role_map {
+  mrm_id            Int        @id @default(autoincrement())
+  mrm_module_id     Int
+  mrm_module        sys_module @relation(fields: [mrm_module_id], references: [module_id])
+  mrm_role_id       Int
+  mrm_role_relation roles      @relation(fields: [mrm_role_id], references: [role_id])
+  mrm_read          Boolean    @default(false)
+  mrm_write         Boolean    @default(false)
+  mrm_status        Boolean    @default(true)
+  mrm_created_by    String?    @db.VarChar(25)
+  mrm_updated_by    String?    @db.VarChar(25)
+  mrm_created_at    DateTime   @default(now())
+  mrm_updated_at    DateTime   @default(now()) @updatedAt
+  mrm_archived      Boolean    @default(false)
+  mrm_deleted       Boolean    @default(false)
+
+  @@index([mrm_role_id, mrm_module_id], map: "mrm_role_module_index")
+}
+
+// ---------------------------------------------------------------------------
+// Organisation
+// ---------------------------------------------------------------------------
+
+model brands {
+  brand_id          Int              @id @default(autoincrement())
+  brand_name        String           @db.VarChar(255)
+  brand_code        String           @unique @db.VarChar(50)
+  brand_description String?
+  brand_status      Boolean          @default(true)
+  brand_created_by  String?          @db.VarChar(25)
+  brand_updated_by  String?          @db.VarChar(25)
+  brand_created_at  DateTime         @default(now())
+  brand_updated_at  DateTime         @default(now()) @updatedAt
+  brand_archived    Boolean          @default(false)
+  brand_deleted     Boolean          @default(false)
+  outlets           outlets[]
+  users             users[]
+  recipes           recipes[]
+  training_paths    training_paths[]
+
+  @@index([brand_status], map: "brand_status_index")
+}
+
+model outlets {
+  outlet_id            Int              @id @default(autoincrement())
+  outlet_name          String           @db.VarChar(255)
+  outlet_code          String           @unique @db.VarChar(50)
+  outlet_brand_id      Int
+  outlet_brand         brands           @relation(fields: [outlet_brand_id], references: [brand_id])
+  outlet_city          String?          @db.VarChar(100)
+  outlet_address       String?
+  outlet_franchisee_id Int?
+  outlet_franchisee    users?           @relation("outlet_franchisee", fields: [outlet_franchisee_id], references: [user_id])
+  outlet_timezone      String           @default("Asia/Kolkata") @db.VarChar(64)
+  // Default shift for staff of this outlet (HH:mm, outlet timezone); users can override
+  outlet_shift_start   String?          @db.VarChar(5)
+  outlet_shift_end     String?          @db.VarChar(5)
+  // ISO weekdays 1 (Mon) - 7 (Sun); empty = every day
+  outlet_shift_days    Int[]            @default([])
+  outlet_status        Boolean          @default(true)
+  outlet_created_by    String?          @db.VarChar(25)
+  outlet_updated_by    String?          @db.VarChar(25)
+  outlet_created_at    DateTime         @default(now())
+  outlet_updated_at    DateTime         @default(now()) @updatedAt
+  outlet_archived      Boolean          @default(false)
+  outlet_deleted       Boolean          @default(false)
+  users                users[]          @relation("user_outlet")
+  transfers_from       user_transfers[] @relation("transfer_from")
+  transfers_to         user_transfers[] @relation("transfer_to")
+
+  @@index([outlet_status], map: "outlet_status_index")
+  @@index([outlet_brand_id], map: "outlet_brand_index")
+}
+
+model users {
+  user_id                   Int                   @id @default(autoincrement())
+  user_employee_id          String                @unique @db.VarChar(50)
+  user_first_name           String                @db.VarChar(255)
+  user_last_name            String                @db.VarChar(255)
+  user_email                String?               @unique @db.VarChar(255)
+  user_mobile               String                @unique @db.VarChar(20)
+  user_password             String                @db.VarChar(255)
+  user_role_id              Int
+  user_role_relation        roles                 @relation(fields: [user_role_id], references: [role_id])
+  user_brand_id             Int?
+  user_brand                brands?               @relation(fields: [user_brand_id], references: [brand_id])
+  user_outlet_id            Int?
+  user_outlet               outlets?              @relation("user_outlet", fields: [user_outlet_id], references: [outlet_id])
+  user_designation          String?               @db.VarChar(100)
+  user_manager_id           Int?
+  user_manager              users?                @relation("user_manager", fields: [user_manager_id], references: [user_id])
+  user_joining_date         DateTime?             @db.Date
+  user_language             String                @default("en") @db.VarChar(10)
+  user_path_id              Int?
+  user_path                 training_paths?       @relation(fields: [user_path_id], references: [tp_id])
+  user_path_deadline        DateTime?             @db.Date
+  // Shift override (HH:mm in outlet timezone); falls back to outlet shift when empty
+  user_shift_start          String?               @db.VarChar(5)
+  user_shift_end            String?               @db.VarChar(5)
+  user_shift_days           Int[]                 @default([])
+  user_shift_exempt         Boolean               @default(false)
+  // Access ends automatically after this moment (temporary staff)
+  user_access_expires_at    DateTime?
+  user_must_change_password Boolean               @default(true)
+  // Bumped to invalidate every issued token (logout everywhere / deactivation)
+  user_token_version        Int                   @default(0)
+  user_failed_login_count   Int                   @default(0)
+  user_locked_until         DateTime?
+  user_last_login_at        DateTime?
+  user_deactivated_at       DateTime?
+  user_deactivation_reason  String?               @db.VarChar(255)
+  user_status               Boolean               @default(true)
+  user_created_by           String?               @db.VarChar(25)
+  user_updated_by           String?               @db.VarChar(25)
+  user_created_at           DateTime              @default(now())
+  user_updated_at           DateTime              @default(now()) @updatedAt
+  user_archived             Boolean               @default(false)
+  user_deleted              Boolean               @default(false)
+  team                      users[]               @relation("user_manager")
+  franchised_outlets        outlets[]             @relation("outlet_franchisee")
+  transfers                 user_transfers[]      @relation("transfer_user")
+  transfers_made            user_transfers[]      @relation("transfer_by")
+  assignments               assignments[]         @relation("assignment_user")
+  assignments_made          assignments[]         @relation("assignment_by")
+  lesson_progress           lesson_progress[]
+  assessment_attempts       assessment_attempts[]
+  acknowledgements          acknowledgements[]
+  notifications             notifications[]
+  otp_codes                 otp_codes[]
+  audit_logs                audit_logs[]
+  published_versions        module_versions[]
+
+  @@index([user_status], map: "user_status_index")
+  @@index([user_outlet_id], map: "user_outlet_index")
+  @@index([user_brand_id], map: "user_brand_index")
+  @@index([user_role_id], map: "user_role_index")
+}
+
+model user_transfers {
+  ut_id             Int      @id @default(autoincrement())
+  ut_user_id        Int
+  ut_user           users    @relation("transfer_user", fields: [ut_user_id], references: [user_id])
+  ut_from_outlet_id Int?
+  ut_from_outlet    outlets? @relation("transfer_from", fields: [ut_from_outlet_id], references: [outlet_id])
+  ut_to_outlet_id   Int?
+  ut_to_outlet      outlets? @relation("transfer_to", fields: [ut_to_outlet_id], references: [outlet_id])
+  ut_note           String?  @db.VarChar(255)
+  ut_created_by_id  Int?
+  ut_created_by     users?   @relation("transfer_by", fields: [ut_created_by_id], references: [user_id])
+  ut_created_at     DateTime @default(now())
+
+  @@index([ut_user_id], map: "ut_user_index")
+}
+
+model otp_codes {
+  otp_id          Int         @id @default(autoincrement())
+  otp_user_id     Int
+  otp_user        users       @relation(fields: [otp_user_id], references: [user_id], onDelete: Cascade)
+  otp_purpose     otp_purpose
+  otp_code_hash   String      @db.VarChar(255)
+  otp_expires_at  DateTime
+  otp_attempts    Int         @default(0)
+  otp_consumed_at DateTime?
+  otp_created_at  DateTime    @default(now())
+
+  @@index([otp_user_id, otp_purpose], map: "otp_user_purpose_index")
+}
+
+// ---------------------------------------------------------------------------
+// Media
+// ---------------------------------------------------------------------------
+
+model videos {
+  video_id               Int          @id @default(autoincrement())
+  video_source           video_source @default(bunny)
+  // Bunny Stream video GUID (bunny source)
+  video_guid             String?      @unique @db.VarChar(64)
+  video_library_id       String?      @db.VarChar(32)
+  // Direct HLS link (external source)
+  video_url              String?
+  video_title            String       @db.VarChar(255)
+  video_state            video_state  @default(uploading)
+  video_duration_seconds Int?
+  video_status           Boolean      @default(true)
+  video_created_by       String?      @db.VarChar(25)
+  video_updated_by       String?      @db.VarChar(25)
+  video_created_at       DateTime     @default(now())
+  video_updated_at       DateTime     @default(now()) @updatedAt
+  video_archived         Boolean      @default(false)
+  video_deleted          Boolean      @default(false)
+  lessons                lessons[]
+  recipes                recipes[]
+
+  @@index([video_status], map: "video_status_index")
+}
+
+model files {
+  file_id         Int            @id @default(autoincrement())
+  file_name       String         @db.VarChar(255)
+  file_key        String         @unique @db.VarChar(255)
+  file_mime       String         @db.VarChar(100)
+  file_size       Int
+  file_status     Boolean        @default(true)
+  file_created_by String?        @db.VarChar(25)
+  file_updated_by String?        @db.VarChar(25)
+  file_created_at DateTime       @default(now())
+  file_updated_at DateTime       @default(now()) @updatedAt
+  file_archived   Boolean        @default(false)
+  file_deleted    Boolean        @default(false)
+  lesson_files    lesson_files[]
+  recipe_images   recipes[]
+  recipe_steps    recipe_steps[]
+
+  @@index([file_status], map: "file_status_index")
+}
+
+model categories {
+  cat_id         Int                @id @default(autoincrement())
+  cat_name       String             @db.VarChar(255)
+  cat_type       category_type
+  cat_sequence   Int                @default(0)
+  cat_status     Boolean            @default(true)
+  cat_created_by String?            @db.VarChar(25)
+  cat_updated_by String?            @db.VarChar(25)
+  cat_created_at DateTime           @default(now())
+  cat_updated_at DateTime           @default(now()) @updatedAt
+  cat_archived   Boolean            @default(false)
+  cat_deleted    Boolean            @default(false)
+  modules        training_modules[]
+  recipes        recipes[]
+
+  @@index([cat_status, cat_type], map: "cat_status_type_index")
+}
+
+// ---------------------------------------------------------------------------
+// Training content
+// ---------------------------------------------------------------------------
+
+model training_modules {
+  tm_id                 Int                     @id @default(autoincrement())
+  tm_code               String?                 @unique @db.VarChar(50)
+  tm_category_id        Int?
+  tm_category           categories?             @relation(fields: [tm_category_id], references: [cat_id])
+  tm_language           String                  @default("en") @db.VarChar(10)
+  // Audience: empty array = every brand / every role
+  tm_brand_ids          Int[]                   @default([])
+  tm_role_ids           Int[]                   @default([])
+  tm_is_mandatory       Boolean                 @default(true)
+  tm_sequence           Int                     @default(0)
+  tm_prerequisite_id    Int?
+  tm_prerequisite       training_modules?       @relation("module_prerequisite", fields: [tm_prerequisite_id], references: [tm_id])
+  // Days from assignment to deadline
+  tm_due_days           Int                     @default(14)
+  tm_current_version_id Int?                    @unique
+  tm_current_version    module_versions?        @relation("module_current_version", fields: [tm_current_version_id], references: [mv_id])
+  tm_status             Boolean                 @default(true)
+  tm_created_by         String?                 @db.VarChar(25)
+  tm_updated_by         String?                 @db.VarChar(25)
+  tm_created_at         DateTime                @default(now())
+  tm_updated_at         DateTime                @default(now()) @updatedAt
+  tm_archived           Boolean                 @default(false)
+  tm_deleted            Boolean                 @default(false)
+  dependents            training_modules[]      @relation("module_prerequisite")
+  versions              module_versions[]       @relation("module_versions")
+  path_modules          training_path_modules[]
+  assignments           assignments[]
+
+  @@index([tm_status], map: "tm_status_index")
+}
+
+model module_versions {
+  mv_id                  Int                   @id @default(autoincrement())
+  mv_module_id           Int
+  mv_module              training_modules      @relation("module_versions", fields: [mv_module_id], references: [tm_id])
+  mv_version_no          Int
+  mv_state               version_state         @default(draft)
+  mv_title               String                @db.VarChar(255)
+  mv_description         String?
+  // SOP / text instructions shown with the module
+  mv_instructions        String?
+  mv_min_watch_percent   Int                   @default(90)
+  mv_pass_mark           Int                   @default(70)
+  // 0 = unlimited attempts
+  mv_max_attempts        Int                   @default(3)
+  // Random subset size per attempt; null = all questions
+  mv_question_limit      Int?
+  mv_randomize_questions Boolean               @default(true)
+  mv_randomize_options   Boolean               @default(true)
+  mv_requires_ack        Boolean               @default(true)
+  mv_ack_text            String                @default("I have read and understood this SOP and will follow it.")
+  mv_update_action       update_action         @default(none)
+  mv_change_note         String?
+  mv_published_at        DateTime?
+  mv_published_by_id     Int?
+  mv_published_by        users?                @relation(fields: [mv_published_by_id], references: [user_id])
+  mv_created_by          String?               @db.VarChar(25)
+  mv_updated_by          String?               @db.VarChar(25)
+  mv_created_at          DateTime              @default(now())
+  mv_updated_at          DateTime              @default(now()) @updatedAt
+  current_of             training_modules?     @relation("module_current_version")
+  lessons                lessons[]
+  questions              questions[]
+  assignments            assignments[]
+  assessment_attempts    assessment_attempts[]
+  acknowledgements       acknowledgements[]
+
+  @@unique([mv_module_id, mv_version_no], map: "mv_module_version_unique")
+}
+
+model lessons {
+  lesson_id                Int               @id @default(autoincrement())
+  lesson_version_id        Int
+  lesson_version           module_versions   @relation(fields: [lesson_version_id], references: [mv_id], onDelete: Cascade)
+  lesson_title             String            @db.VarChar(255)
+  // Rich text instructions
+  lesson_content           String?
+  lesson_video_id          Int?
+  lesson_video             videos?           @relation(fields: [lesson_video_id], references: [video_id])
+  lesson_sequence          Int               @default(0)
+  lesson_is_required       Boolean           @default(true)
+  // Overrides version minimum viewing requirement when set
+  lesson_min_watch_percent Int?
+  lesson_created_at        DateTime          @default(now())
+  lesson_updated_at        DateTime          @default(now()) @updatedAt
+  lesson_files             lesson_files[]
+  lesson_progress          lesson_progress[]
+
+  @@index([lesson_version_id], map: "lesson_version_index")
+}
+
+model lesson_files {
+  lf_id        Int     @id @default(autoincrement())
+  lf_lesson_id Int
+  lf_lesson    lessons @relation(fields: [lf_lesson_id], references: [lesson_id], onDelete: Cascade)
+  lf_file_id   Int
+  lf_file      files   @relation(fields: [lf_file_id], references: [file_id])
+  lf_sequence  Int     @default(0)
+
+  @@index([lf_lesson_id], map: "lf_lesson_index")
+}
+
+model questions {
+  q_id          Int                @id @default(autoincrement())
+  q_version_id  Int
+  q_version     module_versions    @relation(fields: [q_version_id], references: [mv_id], onDelete: Cascade)
+  q_type        question_type      @default(single)
+  q_text        String
+  q_explanation String?
+  q_marks       Int                @default(1)
+  q_sequence    Int                @default(0)
+  q_created_at  DateTime           @default(now())
+  q_updated_at  DateTime           @default(now()) @updatedAt
+  options       question_options[]
+  answers       attempt_answers[]
+
+  @@index([q_version_id], map: "q_version_index")
+}
+
+model question_options {
+  qo_id          Int       @id @default(autoincrement())
+  qo_question_id Int
+  qo_question    questions @relation(fields: [qo_question_id], references: [q_id], onDelete: Cascade)
+  qo_text        String
+  qo_is_correct  Boolean   @default(false)
+  qo_sequence    Int       @default(0)
+
+  @@index([qo_question_id], map: "qo_question_index")
+}
+
+model training_paths {
+  tp_id          Int                     @id @default(autoincrement())
+  tp_name        String                  @db.VarChar(255)
+  tp_description String?
+  tp_role_id     Int?
+  tp_role        roles?                  @relation(fields: [tp_role_id], references: [role_id])
+  tp_brand_id    Int?
+  tp_brand       brands?                 @relation(fields: [tp_brand_id], references: [brand_id])
+  tp_status      Boolean                 @default(true)
+  tp_created_by  String?                 @db.VarChar(25)
+  tp_updated_by  String?                 @db.VarChar(25)
+  tp_created_at  DateTime                @default(now())
+  tp_updated_at  DateTime                @default(now()) @updatedAt
+  tp_archived    Boolean                 @default(false)
+  tp_deleted     Boolean                 @default(false)
+  modules        training_path_modules[]
+  users          users[]
+
+  @@index([tp_status], map: "tp_status_index")
+}
+
+model training_path_modules {
+  tpm_id        Int              @id @default(autoincrement())
+  tpm_path_id   Int
+  tpm_path      training_paths   @relation(fields: [tpm_path_id], references: [tp_id], onDelete: Cascade)
+  tpm_module_id Int
+  tpm_module    training_modules @relation(fields: [tpm_module_id], references: [tm_id])
+  tpm_sequence  Int              @default(0)
+  // Overrides module due days when set
+  tpm_due_days  Int?
+
+  @@unique([tpm_path_id, tpm_module_id], map: "tpm_path_module_unique")
+}
+
+// ---------------------------------------------------------------------------
+// Learner records
+// ---------------------------------------------------------------------------
+
+model assignments {
+  asg_id                   Int                   @id @default(autoincrement())
+  asg_user_id              Int
+  asg_user                 users                 @relation("assignment_user", fields: [asg_user_id], references: [user_id])
+  asg_module_id            Int
+  asg_module               training_modules      @relation(fields: [asg_module_id], references: [tm_id])
+  // Version the learner has to complete; completion stays linked to it
+  asg_version_id           Int
+  asg_version              module_versions       @relation(fields: [asg_version_id], references: [mv_id])
+  asg_state                assignment_state      @default(assigned)
+  asg_source               assignment_source     @default(manual)
+  asg_is_mandatory         Boolean               @default(true)
+  // Only a fresh acknowledgement is required (SOP update)
+  asg_ack_only             Boolean               @default(false)
+  asg_due_at               DateTime?
+  asg_assigned_by_id       Int?
+  asg_assigned_by          users?                @relation("assignment_by", fields: [asg_assigned_by_id], references: [user_id])
+  asg_previous_id          Int?
+  asg_previous             assignments?          @relation("assignment_chain", fields: [asg_previous_id], references: [asg_id])
+  asg_started_at           DateTime?
+  asg_lessons_completed_at DateTime?
+  asg_assessment_passed_at DateTime?
+  asg_acknowledged_at      DateTime?
+  asg_completed_at         DateTime?
+  asg_best_score           Int?
+  asg_attempts_used        Int                   @default(0)
+  asg_last_reminder_at     DateTime?
+  asg_overdue_notified_at  DateTime?
+  asg_revoked_at           DateTime?
+  asg_revoke_reason        String?               @db.VarChar(255)
+  asg_status               Boolean               @default(true)
+  asg_created_by           String?               @db.VarChar(25)
+  asg_updated_by           String?               @db.VarChar(25)
+  asg_created_at           DateTime              @default(now())
+  asg_updated_at           DateTime              @default(now()) @updatedAt
+  asg_archived             Boolean               @default(false)
+  asg_deleted              Boolean               @default(false)
+  next                     assignments[]         @relation("assignment_chain")
+  lesson_progress          lesson_progress[]
+  assessment_attempts      assessment_attempts[]
+  acknowledgement          acknowledgements?
+  notifications            notifications[]
+
+  @@index([asg_user_id, asg_module_id], map: "asg_user_module_index")
+  @@index([asg_state], map: "asg_state_index")
+  @@index([asg_due_at], map: "asg_due_index")
+}
+
+model lesson_progress {
+  lp_id                Int         @id @default(autoincrement())
+  lp_assignment_id     Int
+  lp_assignment        assignments @relation(fields: [lp_assignment_id], references: [asg_id], onDelete: Cascade)
+  lp_lesson_id         Int
+  lp_lesson            lessons     @relation(fields: [lp_lesson_id], references: [lesson_id])
+  lp_user_id           Int
+  lp_user              users       @relation(fields: [lp_user_id], references: [user_id])
+  // Resume point
+  lp_position_seconds  Int         @default(0)
+  // Furthest point reached; seeking beyond it is blocked
+  lp_max_position      Int         @default(0)
+  // Seconds actually watched (only plausible playback increments count)
+  lp_watched_seconds   Int         @default(0)
+  lp_duration_seconds  Int?
+  lp_watched_percent   Int         @default(0)
+  lp_last_heartbeat_at DateTime?
+  lp_completed_at      DateTime?
+  lp_created_at        DateTime    @default(now())
+  lp_updated_at        DateTime    @default(now()) @updatedAt
+
+  @@unique([lp_assignment_id, lp_lesson_id], map: "lp_assignment_lesson_unique")
+}
+
+model assessment_attempts {
+  aa_id             Int               @id @default(autoincrement())
+  aa_assignment_id  Int
+  aa_assignment     assignments       @relation(fields: [aa_assignment_id], references: [asg_id], onDelete: Cascade)
+  aa_user_id        Int
+  aa_user           users             @relation(fields: [aa_user_id], references: [user_id])
+  aa_version_id     Int
+  aa_version        module_versions   @relation(fields: [aa_version_id], references: [mv_id])
+  aa_attempt_no     Int
+  aa_state          attempt_state     @default(in_progress)
+  // Questions served in this attempt, in display order
+  aa_question_ids   Int[]
+  // { [question_id]: option_id[] } display order per question
+  aa_option_order   Json?
+  aa_marks_obtained Int?
+  aa_marks_total    Int?
+  aa_score          Int?
+  aa_passed         Boolean?
+  aa_started_at     DateTime          @default(now())
+  aa_submitted_at   DateTime?
+  answers           attempt_answers[]
+
+  @@index([aa_assignment_id], map: "aa_assignment_index")
+}
+
+model attempt_answers {
+  ans_id          Int                 @id @default(autoincrement())
+  ans_attempt_id  Int
+  ans_attempt     assessment_attempts @relation(fields: [ans_attempt_id], references: [aa_id], onDelete: Cascade)
+  ans_question_id Int
+  ans_question    questions           @relation(fields: [ans_question_id], references: [q_id])
+  ans_option_ids  Int[]               @default([])
+  ans_text        String?
+  // null for written answers (not auto graded)
+  ans_is_correct  Boolean?
+  ans_marks       Int                 @default(0)
+
+  @@unique([ans_attempt_id, ans_question_id], map: "ans_attempt_question_unique")
+}
+
+model acknowledgements {
+  ack_id            Int             @id @default(autoincrement())
+  ack_assignment_id Int             @unique
+  ack_assignment    assignments     @relation(fields: [ack_assignment_id], references: [asg_id], onDelete: Cascade)
+  ack_user_id       Int
+  ack_user          users           @relation(fields: [ack_user_id], references: [user_id])
+  ack_version_id    Int
+  ack_version       module_versions @relation(fields: [ack_version_id], references: [mv_id])
+  // Exact statement the learner agreed to
+  ack_text          String
+  ack_ip            String?         @db.VarChar(64)
+  ack_user_agent    String?         @db.VarChar(255)
+  ack_created_at    DateTime        @default(now())
+}
+
+// ---------------------------------------------------------------------------
+// Recipe library
+// ---------------------------------------------------------------------------
+
+model recipes {
+  recipe_id                   Int                  @id @default(autoincrement())
+  recipe_name                 String               @db.VarChar(255)
+  recipe_code                 String?              @unique @db.VarChar(50)
+  recipe_brand_id             Int?
+  recipe_brand                brands?              @relation(fields: [recipe_brand_id], references: [brand_id])
+  recipe_category_id          Int?
+  recipe_category             categories?          @relation(fields: [recipe_category_id], references: [cat_id])
+  // Roles allowed to view; empty = every role
+  recipe_role_ids             Int[]                @default([])
+  recipe_description          String?
+  recipe_video_id             Int?
+  recipe_video                videos?              @relation(fields: [recipe_video_id], references: [video_id])
+  recipe_portion_size         String?              @db.VarChar(100)
+  recipe_yield                String?              @db.VarChar(100)
+  recipe_prep_time_minutes    Int?
+  recipe_cook_time_minutes    Int?
+  recipe_equipment            String[]             @default([])
+  recipe_cooking_instructions String?
+  recipe_plating_instructions String?
+  recipe_plating_image_id     Int?
+  recipe_plating_image        files?               @relation(fields: [recipe_plating_image_id], references: [file_id])
+  recipe_storage_instructions String?
+  recipe_shelf_life           String?              @db.VarChar(100)
+  recipe_food_safety          String?
+  recipe_common_mistakes      String[]             @default([])
+  recipe_quality_checkpoints  String[]             @default([])
+  recipe_is_published         Boolean              @default(false)
+  recipe_published_at         DateTime?
+  recipe_revision             Int                  @default(0)
+  recipe_status               Boolean              @default(true)
+  recipe_created_by           String?              @db.VarChar(25)
+  recipe_updated_by           String?              @db.VarChar(25)
+  recipe_created_at           DateTime             @default(now())
+  recipe_updated_at           DateTime             @default(now()) @updatedAt
+  recipe_archived             Boolean              @default(false)
+  recipe_deleted              Boolean              @default(false)
+  ingredients                 recipe_ingredients[]
+  steps                       recipe_steps[]
+  revisions                   recipe_revisions[]
+
+  @@index([recipe_status], map: "recipe_status_index")
+  @@index([recipe_brand_id], map: "recipe_brand_index")
+}
+
+model recipe_ingredients {
+  ri_id        Int      @id @default(autoincrement())
+  ri_recipe_id Int
+  ri_recipe    recipes  @relation(fields: [ri_recipe_id], references: [recipe_id], onDelete: Cascade)
+  ri_name      String   @db.VarChar(255)
+  ri_quantity  Decimal? @db.Decimal(10, 3)
+  ri_unit      String?  @db.VarChar(30)
+  ri_note      String?  @db.VarChar(255)
+  ri_sequence  Int      @default(0)
+
+  @@index([ri_recipe_id], map: "ri_recipe_index")
+}
+
+model recipe_steps {
+  rs_id               Int     @id @default(autoincrement())
+  rs_recipe_id        Int
+  rs_recipe           recipes @relation(fields: [rs_recipe_id], references: [recipe_id], onDelete: Cascade)
+  rs_sequence         Int     @default(0)
+  rs_instruction      String
+  rs_duration_minutes Int?
+  rs_image_id         Int?
+  rs_image            files?  @relation(fields: [rs_image_id], references: [file_id])
+
+  @@index([rs_recipe_id], map: "rs_recipe_index")
+}
+
+// Snapshot of a recipe every time it is published (change history)
+model recipe_revisions {
+  rr_id         Int      @id @default(autoincrement())
+  rr_recipe_id  Int
+  rr_recipe     recipes  @relation(fields: [rr_recipe_id], references: [recipe_id], onDelete: Cascade)
+  rr_revision   Int
+  rr_snapshot   Json
+  rr_note       String?  @db.VarChar(255)
+  rr_created_by String?  @db.VarChar(25)
+  rr_created_at DateTime @default(now())
+
+  @@unique([rr_recipe_id, rr_revision], map: "rr_recipe_revision_unique")
+}
+
+// ---------------------------------------------------------------------------
+// Notifications & audit
+// ---------------------------------------------------------------------------
+
+model notifications {
+  ntf_id            Int               @id @default(autoincrement())
+  ntf_user_id       Int
+  ntf_user          users             @relation(fields: [ntf_user_id], references: [user_id], onDelete: Cascade)
+  ntf_type          notification_type
+  ntf_title         String            @db.VarChar(255)
+  ntf_message       String
+  ntf_link          String?           @db.VarChar(255)
+  ntf_assignment_id Int?
+  ntf_assignment    assignments?      @relation(fields: [ntf_assignment_id], references: [asg_id], onDelete: SetNull)
+  ntf_read_at       DateTime?
+  ntf_emailed_at    DateTime?
+  ntf_created_at    DateTime          @default(now())
+
+  @@index([ntf_user_id, ntf_read_at], map: "ntf_user_read_index")
+}
+
+model audit_logs {
+  al_id         Int      @id @default(autoincrement())
+  al_user_id    Int?
+  al_user       users?   @relation(fields: [al_user_id], references: [user_id], onDelete: SetNull)
+  al_action     String   @db.VarChar(100)
+  al_entity     String   @db.VarChar(50)
+  al_entity_id  Int?
+  al_meta       Json?
+  al_ip         String?  @db.VarChar(64)
+  al_user_agent String?  @db.VarChar(255)
+  al_created_at DateTime @default(now())
+
+  @@index([al_entity, al_entity_id], map: "al_entity_index")
+  @@index([al_user_id], map: "al_user_index")
+  @@index([al_created_at], map: "al_created_index")
+}

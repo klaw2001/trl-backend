@@ -1,0 +1,25 @@
+{
+    "compilerOptions": {
+        "target": "es2022",
+        "lib": ["es2023"],
+        "module": "commonjs",
+        "moduleResolution": "node",
+        "rootDir": "./src",
+        "outDir": "./dist",
+        "baseUrl": ".",
+        "paths": {
+            "@/*": ["./src/*"],
+            "@core/*": ["./src/@core/*"]
+        },
+        "typeRoots": ["./node_modules/@types", "./types"],
+        "esModuleInterop": true,
+        "resolveJsonModule": true,
+        "forceConsistentCasingInFileNames": true,
+        "strict": true,
+        "noImplicitReturns": true,
+        "noFallthroughCasesInSwitch": true,
+        "skipLibCheck": true,
+        "sourceMap": true
+    },
+    "include": ["src/**/*"]
+}
